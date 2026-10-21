@@ -1,8 +1,8 @@
 """Небо RP Sky: мир под огромным куполом из бетона и металла (референсы — Metal Garden, Blame!, Control).
 
-Купол высоко над головой, почти плоский (мир плоский), чуть опускается к горизонту. Он сложен из громадных плит
-разного размера без длинных полос; бетон с зерном, пятнами, потёками от швов, сколами, раковинами и трещинами,
-кое-где плиты нет — тёмный провал. Под куполом — слой облаков, у горизонта всё тонет в светлой дымке.
+Купол высоко над головой, почти плоский (мир плоский), чуть опускается к горизонту. Он сложен из бетонных панелей рядами
+(каждый второй ряд сдвинут на полпанели, изредка панель поделена), швы тонкие и местами не видны; бетон с зерном,
+сырыми пятнами, потёками сверху вниз, высолами, раковинами, редкими трещинами и сколами. Под куполом — слой облаков, у горизонта всё тонет в светлой дымке.
 
 Каждый пиксель считается по направлению взгляда, поэтому шесть граней куба стыкуются без швов. Грани описаны
 так же, как в client/SkyRenderer.java (центр, вправо, вниз по картинке) — менять только вместе.
@@ -20,7 +20,7 @@ from PIL import Image
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUT = os.path.join(ROOT, "src", "main", "resources", "assets", "rpsky", "textures", "sky")
 
-SIZE = 1024
+SIZE = 2048
 SS = 2  # сглаживание: SS×SS лучей на пиксель
 
 # Грань: центр, «вправо» (u), «вниз» (v). Координаты Minecraft: +Y вверх, −Z север, +X восток.
@@ -36,24 +36,22 @@ FACES = {
 # ---------------------------------------------------------------- параметры вида
 # Купол: высота над головой 1, к горизонту чуть опускается (радиус кривизны DOME_R; больше — площе).
 DOME_R = 40.0
-SLAB = 0.6  # крупная ячейка, которую потом режем на плиты (над головой ≈ 33°)
-SPLITS = (0.95, 0.8, 0.55, 0.3)  # вероятность разреза на каждом уровне; режем всегда по длинной стороне
-SEAM = 0.007  # полуширина шва между плитами, в единицах купола
-VOID_SHARE = 0.03  # плиты нет — тёмный провал
-METAL_SHARE = 0.10
+PANEL_W = 0.30  # панель: ширина и высота на потолке высотой 1 (над головой ≈ 17° × 25°)
+PANEL_H = 0.45
+SPLIT_SHARE = 0.12  # доля панелей, поделённых пополам
+SEAM = 0.0025  # полуширина шва
 
-ZENITH_VIS = 0.5  # насколько виден купол прямо над головой
-HAZE_K = 0.85  # как быстро дымка густеет с расстоянием
+ZENITH_VIS = 0.68  # насколько виден купол прямо над головой
+HAZE_K = 0.75  # как быстро дымка густеет с расстоянием
 CLOUD_H = 0.55  # высота облаков (купол — 1)
-CLOUD_COVER = 0.40  # порог плотности: меньше — больше облаков
+CLOUD_COVER = 0.47  # порог плотности: меньше — больше облаков
 
 HAZE_TOP = np.array([0.56, 0.57, 0.56])
 HAZE_HORIZON = np.array([0.74, 0.75, 0.75])
 HAZE_BELOW = np.array([0.60, 0.61, 0.61])
-CONCRETE = np.array([0.50, 0.51, 0.47])
-METAL = np.array([0.36, 0.34, 0.31])
-VOID = np.array([0.22, 0.23, 0.23])
-SEAM_COL = np.array([0.20, 0.20, 0.19])
+CONCRETE = np.array([0.53, 0.52, 0.49])
+STAIN = np.array([0.33, 0.33, 0.29])
+SEAM_COL = np.array([0.24, 0.24, 0.23])
 CLOUD_LIT = np.array([0.76, 0.77, 0.77])
 CLOUD_DARK = np.array([0.48, 0.49, 0.50])
 
@@ -101,97 +99,82 @@ def mix(a, b, t):
 
 
 def slabs(px, pz):
-    """Раскрой купола на плиты: крупная ячейка, разрезанная несколько раз в случайных местах, всегда поперёк
-    длинной стороны (без длинных полос). Возвращает расстояние до края, номер плиты (kx, kz) и её границы."""
-    # Ряды крупных ячеек сдвинуты, как кладка, — без сквозных линий через весь купол.
-    iz = np.floor(pz / SLAB)
-    shift = hash2(iz, iz * 0 + 3, 99) * SLAB
-    ix = np.floor((px - shift) / SLAB)
-    x0, z0 = ix * SLAB + shift, iz * SLAB
-    x1, z1 = x0 + SLAB, z0 + SLAB
-    path = np.ones_like(px, dtype=np.int64)
-    for lvl, p in enumerate(SPLITS):
-        key = ix + path * 7919
-        do = hash2(key, iz, 100 + lvl) < p
-        along_x = (x1 - x0) >= (z1 - z0)
-        f = 0.38 + 0.24 * hash2(key, iz, 300 + lvl)
-        mid = np.where(along_x, x0 + f * (x1 - x0), z0 + f * (z1 - z0))
-        side = np.where(along_x, px > mid, pz > mid)
-        x0 = np.where(do & along_x & side, mid, x0)
-        x1 = np.where(do & along_x & ~side, mid, x1)
-        z0 = np.where(do & ~along_x & side, mid, z0)
-        z1 = np.where(do & ~along_x & ~side, mid, z1)
-        path = np.where(do, path * 2 + side.astype(np.int64), path)
+    """Раскладка панелей: ряды одинаковых прямоугольных панелей, каждый второй ряд сдвинут на полпанели;
+    изредка панель поделена пополам. Возвращает расстояние до края, номер панели (kx, kz) и её границы."""
+    iz = np.floor(pz / PANEL_H)
+    shift = np.where(iz % 2 == 0, 0.0, PANEL_W / 2)
+    ix = np.floor((px - shift) / PANEL_W)
+    x0, z0 = ix * PANEL_W + shift, iz * PANEL_H
+    x1, z1 = x0 + PANEL_W, z0 + PANEL_H
+    split = hash2(ix, iz, 100) < SPLIT_SHARE
+    mid = (z0 + z1) / 2
+    lower = pz > mid
+    z0 = np.where(split & lower, mid, z0)
+    z1 = np.where(split & ~lower, mid, z1)
+    kz = iz * 2 + np.where(split & lower, 1, 0)
     e = np.minimum(np.minimum(px - x0, x1 - px), np.minimum(pz - z0, z1 - pz))
-    return e, ix + path * 7919, iz, x0, x1, z0, z1
+    return e, ix, kz, x0, x1, z0, z1
 
 
 def dome(px, pz, detail):
     """Цвет купола в точке (px, pz). detail 0–1 гасит мелочь вдали (чтобы не рябило)."""
     e, kx, kz, x0, x1, z0, z1 = slabs(px, pz)
     dt = detail[..., None]
-    r = hash2(kx, kz, 1)
-    kind = hash2(kx, kz, 2)
-    void = kind < VOID_SHARE
-    metal = (kind >= VOID_SHARE) & (kind < VOID_SHARE + METAL_SHARE)
 
-    # Тон плиты: светлее-темнее, чуть теплее-холоднее.
-    tone = 1 + (r - 0.5) * 0.22
-    warm = (hash2(kx, kz, 3) - 0.5) * 0.05
-    base = np.where(metal[..., None], METAL, CONCRETE) * tone[..., None] + warm[..., None] * np.array([1.0, 0.2, -0.8])
+    # Один бетон; панели чуть различаются тоном.
+    tone = 1 + (hash2(kx, kz, 1) - 0.5) * 0.07
+    base = CONCRETE * tone[..., None]
 
-    # Зерно и мелкая пестрота бетона.
-    grain = (value_noise(px * 240, pz * 240, 61) - 0.5) * 0.12 + (value_noise(px * 80, pz * 80, 62) - 0.5) * 0.08
-    mottle = fbm(px * 7, pz * 7, 63, 4) - 0.5
-    base = base * (1 + grain[..., None] * dt + mottle[..., None] * 0.16)
+    # Зерно, крапинки и мелкая пестрота.
+    grain = (value_noise(px * 420, pz * 420, 61) - 0.5) * 0.10 + (value_noise(px * 140, pz * 140, 62) - 0.5) * 0.08
+    speck = smoothstep(0.80, 0.92, value_noise(px * 260, pz * 260, 65)) - smoothstep(0.84, 0.95, value_noise(px * 230, pz * 230, 66))
+    mottle = fbm(px * 6, pz * 6, 63, 5) - 0.5
+    base = base * (1 + grain[..., None] * dt + speck[..., None] * 0.10 * dt + mottle[..., None] * 0.14)
 
-    # Пятна с рваными краями (сырость, плесень): темнее и чуть зеленовато-бурые.
-    s = fbm(px * 1.7, pz * 1.7, 11, 5) + (value_noise(px * 34, pz * 34, 64) - 0.5) * 0.07 * detail
-    blot = smoothstep(0.52, 0.62, s)
-    stain_col = base * 0.6 + np.array([0.0, 0.012, -0.012])
-    base = mix(base, stain_col, blot * 0.85)
+    # Сырые пятна с рваными краями: крупные, тёмные, буро-зелёные.
+    s = fbm(px * 1.5, pz * 1.5, 11, 6) + (fbm(px * 25, pz * 25, 64, 3) - 0.5) * 0.10
+    blot = smoothstep(0.52, 0.60, s)
+    inner = smoothstep(0.58, 0.70, s)
+    base = mix(base, STAIN, blot * 0.7 + inner * 0.3)
 
-    # Потёки от верхнего шва плиты: тёмные полосы вдоль плиты, слабеют к середине.
+    # Потёки сверху вниз по панели (от верхнего шва), неровные, разной длины.
     h = np.maximum(z1 - z0, 1e-6)
     dz = (pz - z0) / h
-    streak = smoothstep(0.45, 0.8, value_noise(px * 60, pz * 3.5, 71)) * smoothstep(0.3, 0.7, value_noise(px * 9, pz * 1.2, 72))
-    drip = streak * np.exp(-dz * 3.2) * (0.4 + 0.6 * hash2(kx, kz, 8))
-    base = base * (1 - 0.35 * drip[..., None] * dt)
+    lane = value_noise(px * 70, kz * 0.37, 71)  # «дорожки» потёков поперёк панели
+    length = 0.15 + 0.75 * value_noise(px * 18, kz * 0.53, 72)
+    drip = smoothstep(0.55, 0.75, lane) * (1 - smoothstep(length * 0.6, length, dz))
+    drip = drip * (0.5 + 0.5 * value_noise(px * 300, pz * 40, 73))
+    base = mix(base, STAIN, drip * 0.45 * detail)
+
+    # Белёсые высолы — светлые разводы.
+    salt = smoothstep(0.62, 0.72, fbm(px * 3 + 7, pz * 3 - 2, 67, 5))
+    base = base * (1 + 0.10 * salt[..., None])
 
     # Раковины — мелкие тёмные точки.
-    pit = smoothstep(0.90, 0.96, value_noise(px * 170, pz * 170, 91)) * detail
-    base = base * (1 - 0.45 * pit[..., None])
+    pit = smoothstep(0.92, 0.97, value_noise(px * 200, pz * 200, 91)) * detail
+    base = base * (1 - 0.4 * pit[..., None])
 
-    # Трещины: у части плит — тонкая ломаная линия через плиту.
+    # Трещины — редкие, тонкие, ломаные.
     th = hash2(kx, kz, 5) * np.pi
     nx, nz = np.cos(th), np.sin(th)
     cx, cz = (x0 + x1) / 2, (z0 + z1) / 2
-    off = (hash2(kx, kz, 6) - 0.5) * 0.6 * np.minimum(x1 - x0, z1 - z0)
+    off = (hash2(kx, kz, 6) - 0.5) * 0.5 * np.minimum(x1 - x0, z1 - z0)
     along_c = -(px - cx) * nz + (pz - cz) * nx
-    jag = (value_noise(along_c * 14, kx * 0.1, 33) - 0.5) * 0.025 + (value_noise(along_c * 60, kz * 0.1, 34) - 0.5) * 0.005
+    jag = (value_noise(along_c * 16, kx * 0.1, 33) - 0.5) * 0.02 + (value_noise(along_c * 70, kz * 0.1, 34) - 0.5) * 0.004
     d_crack = np.abs((px - cx) * nx + (pz - cz) * nz - off + jag)
-    cracked = hash2(kx, kz, 7) < 0.25
-    crack = np.where(cracked, 1 - smoothstep(0.0015, 0.004, d_crack), 0.0) * detail
-    base = mix(base, SEAM_COL, crack * 0.7)
+    cracked = hash2(kx, kz, 7) < 0.12
+    crack = np.where(cracked, 1 - smoothstep(0.001, 0.0028, d_crack), 0.0) * detail
+    base = mix(base, SEAM_COL, crack * 0.6)
 
-    # Кромки: светлая с одной стороны, в тени с другой — плиты чуть объёмные.
-    bw = 0.010
-    lit = np.maximum(1 - smoothstep(0, bw, px - x0), 1 - smoothstep(0, bw, pz - z0))
-    shadow = np.maximum(1 - smoothstep(0, bw, x1 - px), 1 - smoothstep(0, bw, z1 - pz))
-    base = base * (1 + 0.10 * lit[..., None] - 0.14 * shadow[..., None])
-
-    # Сколы по краям: рваные тёмные выбоины у шва.
+    # Сколы у шва — редко.
     cn = fbm(px * 22, pz * 22, 81, 3)
-    chip = smoothstep(0.64, 0.70, cn) * (1 - smoothstep(0.006, 0.0062 + 0.05 * np.clip(cn - 0.6, 0, 1), e))
-    base = mix(base, base * 0.62, chip * 0.9)
+    chip = smoothstep(0.72, 0.76, cn) * (1 - smoothstep(0.004, 0.0042 + 0.04 * np.clip(cn - 0.7, 0, 1), e))
+    base = mix(base, base * 0.7, chip * 0.8)
 
-    # Пустая плита: тёмный провал.
-    base = np.where(void[..., None], VOID * (1 + mottle[..., None] * 0.3), base)
-
-    # Швы неровной ширины, мягкие.
-    w = SEAM * (0.7 + 0.6 * value_noise(px * 6, pz * 6, 41))
-    seam = 1 - smoothstep(w * 0.3, w, e)
-    return mix(base, SEAM_COL, seam * 0.8)
+    # Швы тонкие, местами почти не видны.
+    seen = 0.15 + 0.6 * smoothstep(0.35, 0.7, value_noise(px * 4, pz * 4, 41))
+    seam = 1 - smoothstep(SEAM * 0.4, SEAM, e)
+    return mix(base, SEAM_COL, seam * seen)
 
 def dome_hit(x, y, z):
     """Расстояние вдоль луча до купола: высота 1 над головой, опускается на s²/(2R)."""
