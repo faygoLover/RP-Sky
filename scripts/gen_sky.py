@@ -1,8 +1,7 @@
 """Небо RP Sky: мир под огромным куполом из бетона и металла (референсы — Metal Garden, Blame!, Control).
 
 Купол высоко над головой и опускается к горизонту. Он сложен из громадных плит разного размера (не сетка),
-по нему идут несущие рёбра и кольца; бетон в потёках, длинных царапинах и трещинах, кое-где плиты нет — видна
-решётка конструкции. Под куполом — слой облаков, у горизонта всё тонет в светлой дымке.
+бетон в пятнах, потёках и трещинах, кое-где плиты нет — тёмный провал. Под куполом — слой облаков, у горизонта всё тонет в светлой дымке.
 
 Каждый пиксель считается по направлению взгляда, поэтому шесть граней куба стыкуются без швов. Грани описаны
 так же, как в client/SkyRenderer.java (центр, вправо, вниз по картинке) — менять только вместе.
@@ -41,10 +40,6 @@ SPLITS = (0.95, 0.8, 0.6, 0.4)  # вероятность разреза на к�
 SEAM = 0.007  # полуширина шва между плитами, в единицах купола
 VOID_SHARE = 0.05  # плиты нет — видна решётка
 METAL_SHARE = 0.18
-RIBS = 12  # радиальных рёбер
-RING_STEP = 2.2  # шаг колец
-RIB_W = 0.04
-CENTER = (0.7, -0.4)  # центр рёбер смещён — не ровно над головой
 
 ZENITH_VIS = 0.5  # насколько виден купол прямо над головой
 HAZE_K = 0.85  # как быстро дымка густеет с расстоянием
@@ -58,7 +53,6 @@ CONCRETE = np.array([0.50, 0.51, 0.47])
 METAL = np.array([0.36, 0.34, 0.31])
 VOID = np.array([0.22, 0.23, 0.23])
 SEAM_COL = np.array([0.20, 0.20, 0.19])
-RIB_COL = np.array([0.30, 0.30, 0.29])
 CLOUD_LIT = np.array([0.76, 0.77, 0.77])
 CLOUD_DARK = np.array([0.48, 0.49, 0.50])
 
@@ -144,12 +138,12 @@ def dome(px, pz, detail):
     stains = fbm(px * 2.2, pz * 2.2, 11) - 0.5
     grime = fbm(px * 18, pz * 18, 12, 3) - 0.5
     base = base * (1 + stains[..., None] * 0.35 + grime[..., None] * 0.10 * detail[..., None])
-    # Длинные царапины в двух направлениях (как на куполе Metal Garden).
+    # Длинные царапины в двух направлениях — едва заметные (сильнее читались как тёмная штриховка).
     a = 0.35
     u1, v1 = px * np.cos(a) + pz * np.sin(a), -px * np.sin(a) + pz * np.cos(a)
     s1 = value_noise(u1 * 90, v1 * 1.3, 21) - 0.5
     s2 = value_noise(v1 * 70, u1 * 1.1, 22) - 0.5
-    base = base * (1 + (s1 * 0.18 + s2 * 0.12)[..., None] * detail[..., None])
+    base = base * (1 + (s1 * 0.05 + s2 * 0.035)[..., None] * detail[..., None])
     # Трещины: у части плит — ломаная линия через плиту (прямая с изломами, не «червяк»).
     th = hash2(kx, kz, 5) * np.pi
     nx, nz = np.cos(th), np.sin(th)
@@ -161,30 +155,14 @@ def dome(px, pz, detail):
     crack = np.where(cracked, 1 - smoothstep(0.002, 0.005, d_crack), 0.0) * detail
     base = mix(base, SEAM_COL, crack * 0.8)
 
-    # Пустая плита: тёмная глубина и поперечные балки решётки.
-    stripes = smoothstep(0.75, 0.9, np.abs(np.sin(along * 70)))
-    vcol = VOID * (1 + 0.6 * stripes[..., None] * detail[..., None])
-    base = np.where(void[..., None], vcol, base)
+    # Пустая плита: тёмная глубина без полос.
+    base = np.where(void[..., None], VOID * (1 + stains[..., None] * 0.3), base)
 
     # Швы неровной ширины.
     w = SEAM * (0.7 + 0.6 * value_noise(px * 6, pz * 6, 41))
     seam = 1 - smoothstep(w * 0.45, w, e)
     col = mix(base, SEAM_COL, seam * 0.75)
 
-    # Несущие рёбра (радиальные) и кольца — смещённый центр.
-    qx, qz = px - CENTER[0], pz - CENTER[1]
-    rr = np.hypot(qx, qz)
-    ang = np.arctan2(qz, qx)
-    sector = 2 * np.pi / RIBS
-    d_ang = np.abs(((ang + sector / 2) % sector) - sector / 2)
-    d_rib = rr * np.sin(d_ang)
-    d_ring = np.abs(rr - RING_STEP * np.round(rr / RING_STEP))
-    rib = (1 - smoothstep(RIB_W * 0.6, RIB_W, d_rib)) * smoothstep(0.4, 0.9, rr)
-    ring = (1 - smoothstep(RIB_W * 0.8, RIB_W * 1.3, d_ring)) * smoothstep(0.5, 1.0, rr)
-    beam = np.maximum(rib, ring)
-    edge = (1 - smoothstep(0, RIB_W * 0.35, np.minimum(d_rib, d_ring))) * beam  # светлая кромка
-    col = mix(col, RIB_COL, beam * 0.55)
-    col = col * (1 + 0.25 * edge[..., None])
     return col
 
 
