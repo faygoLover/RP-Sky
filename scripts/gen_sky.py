@@ -1,10 +1,15 @@
-﻿"""Небо RP Sky: тусклая серая дымка, за которой высоко над головой видны плиты потолка — бетон и металл.
+"""Небо RP Sky: мир под огромным куполом из бетона и металла (референсы — Metal Garden, Blame!, Control).
+
+Купол высоко над головой и опускается к горизонту. Он сложен из громадных плит разного размера (не сетка),
+по нему идут несущие рёбра и кольца; бетон в потёках, длинных царапинах и трещинах, кое-где плиты нет — видна
+решётка конструкции. Под куполом — слой облаков, у горизонта всё тонет в светлой дымке.
 
 Каждый пиксель считается по направлению взгляда, поэтому шесть граней куба стыкуются без швов. Грани описаны
 так же, как в client/SkyRenderer.java (центр, вправо, вниз по картинке) — менять только вместе.
 
-    python scripts/gen_sky.py            # грани в src/main/resources/assets/rpsky/textures/sky
-    python scripts/gen_sky.py --preview  # ещё и превью «взгляд вверх» в build/sky_preview.png
+    python scripts/gen_sky.py                 # грани в src/main/resources/assets/rpsky/textures/sky
+    python scripts/gen_sky.py --preview       # ещё и превью в build/sky_preview_*.png
+    python scripts/gen_sky.py --preview-only  # только превью (быстро)
 """
 import argparse
 import os
@@ -16,7 +21,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUT = os.path.join(ROOT, "src", "main", "resources", "assets", "rpsky", "textures", "sky")
 
 SIZE = 1024
-SS = 3  # сглаживание: SS×SS лучей на пиксель
+SS = 2  # сглаживание: SS×SS лучей на пиксель
 
 # Грань: центр, «вправо» (u), «вниз» (v). Координаты Minecraft: +Y вверх, −Z север, +X восток.
 FACES = {
@@ -29,29 +34,41 @@ FACES = {
 }
 
 # ---------------------------------------------------------------- параметры вида
-PANEL = 0.34  # сторона плиты на потолке высотой 1 (над головой плита ≈ 19°)
-GIRDER_EVERY = 4  # балка каждые N плит
-SEAM = 0.022  # полуширина шва, доли плиты
-GIRDER = 0.05  # полуширина балки, доли плиты
-ZENITH_VIS = 0.26  # насколько видны плиты прямо над головой (0 — сплошная дымка)
-HAZE_K = 1.35  # как быстро дымка густеет к горизонту
-METAL_SHARE = 0.3
+# Купол: высота над головой 1, к горизонту опускается (радиус кривизны DOME_R).
+DOME_R = 8.0
+SLAB = 0.6  # крупная ячейка, которую потом режем на плиты (над головой ≈ 33°)
+SPLITS = (0.95, 0.8, 0.6, 0.4)  # вероятность разреза на каждом уровне
+SEAM = 0.007  # полуширина шва между плитами, в единицах купола
+VOID_SHARE = 0.05  # плиты нет — видна решётка
+METAL_SHARE = 0.18
+RIBS = 12  # радиальных рёбер
+RING_STEP = 2.2  # шаг колец
+RIB_W = 0.04
+CENTER = (0.7, -0.4)  # центр рёбер смещён — не ровно над головой
 
-HAZE_TOP = np.array([0.53, 0.54, 0.55])
-HAZE_HORIZON = np.array([0.63, 0.63, 0.62])
-HAZE_BELOW = np.array([0.45, 0.45, 0.45])
-CONCRETE = np.array([0.40, 0.39, 0.37])
-METAL = np.array([0.31, 0.33, 0.36])
-GIRDER_COL = np.array([0.25, 0.26, 0.27])
-SEAM_COL = np.array([0.24, 0.24, 0.24])
+ZENITH_VIS = 0.5  # насколько виден купол прямо над головой
+HAZE_K = 0.85  # как быстро дымка густеет с расстоянием
+CLOUD_H = 0.55  # высота облаков (купол — 1)
+CLOUD_COVER = 0.40  # порог плотности: меньше — больше облаков
+
+HAZE_TOP = np.array([0.56, 0.57, 0.56])
+HAZE_HORIZON = np.array([0.74, 0.75, 0.75])
+HAZE_BELOW = np.array([0.60, 0.61, 0.61])
+CONCRETE = np.array([0.50, 0.51, 0.47])
+METAL = np.array([0.36, 0.34, 0.31])
+VOID = np.array([0.22, 0.23, 0.23])
+SEAM_COL = np.array([0.20, 0.20, 0.19])
+RIB_COL = np.array([0.30, 0.30, 0.29])
+CLOUD_LIT = np.array([0.76, 0.77, 0.77])
+CLOUD_DARK = np.array([0.48, 0.49, 0.50])
 
 MASK = np.uint64(0xFFFFFFFF)
 
 
 def hash2(ix, iz, seed):
     """Случайное 0–1 для целой точки решётки."""
-    h = (ix.astype(np.int64).astype(np.uint64) * np.uint64(374761393)
-         + iz.astype(np.int64).astype(np.uint64) * np.uint64(668265263)
+    h = (np.asarray(ix).astype(np.int64).astype(np.uint64) * np.uint64(374761393)
+         + np.asarray(iz).astype(np.int64).astype(np.uint64) * np.uint64(668265263)
          + np.uint64(seed) * np.uint64(1442695041)) & MASK
     h = ((h ^ (h >> np.uint64(13))) * np.uint64(1274126177)) & MASK
     h = h ^ (h >> np.uint64(16))
@@ -66,7 +83,8 @@ def value_noise(x, z, seed):
     b = hash2(ix + 1, iz, seed)
     c = hash2(ix, iz + 1, seed)
     d = hash2(ix + 1, iz + 1, seed)
-    return (a + (b - a) * ux) + ((c + (d - c) * ux) - (a + (b - a) * ux)) * uz
+    top = a + (b - a) * ux
+    return top + (c + (d - c) * ux - top) * uz
 
 
 def fbm(x, z, seed, octaves=4):
@@ -74,7 +92,7 @@ def fbm(x, z, seed, octaves=4):
     for o in range(octaves):
         s = s + value_noise(x, z, seed + o * 17) * amp
         norm += amp
-        x, z, amp = x * 2.03, z * 2.03, amp * 0.5
+        x, z, amp = x * 2.03 + 0.37, z * 2.03 - 0.71, amp * 0.5
     return s / norm
 
 
@@ -83,46 +101,100 @@ def smoothstep(e0, e1, x):
     return t * t * (3 - 2 * t)
 
 
-def ceiling(px, pz):
-    """Цвет потолка в точке плоскости (px, pz)."""
-    gz = pz / PANEL
-    # Ряды плит сдвинуты друг относительно друга — не офисная сетка.
-    gx = px / PANEL + hash2(np.floor(gz), np.zeros_like(gz), 9) * 0.8
-    ix, iz = np.floor(gx), np.floor(gz)
-    fx, fz = gx - ix, gz - iz
-    r = hash2(ix, iz, 1)
-    metal = hash2(ix, iz, 2) < METAL_SHARE
-    shade = (hash2(ix, iz, 3) - 0.5) * 0.22
+def mix(a, b, t):
+    return a + (b - a) * t[..., None]
 
-    # Швы: края плиты, у части плит — дополнительный шов посередине (плита из двух или четырёх).
-    e = np.minimum(np.minimum(fx, 1 - fx), np.minimum(fz, 1 - fz))
-    split2 = r < 0.30
-    split4 = (r >= 0.30) & (r < 0.42)
-    e = np.where(split2 | split4, np.minimum(e, np.abs(fx - 0.5)), e)
-    e = np.where(split4, np.minimum(e, np.abs(fz - 0.5)), e)
-    seam = 1 - smoothstep(SEAM * 0.4, SEAM, e)
 
-    # Бетон: пятна и потёки; металл: рёбра и заклёпки по краю.
-    stains = fbm(px * 9, pz * 9, 11) - 0.5
-    base = np.where(metal[..., None], METAL, CONCRETE) * (1 + shade[..., None] + stains[..., None] * 0.22)
-    ribs = np.where(metal, 0.035 * np.sin(fx * np.pi * 12), 0.0)
-    base = base * (1 + ribs[..., None])
-    rx = np.abs(((fx * 8) % 1) - 0.5)
-    edge = np.minimum(np.abs(fz - 0.07), np.abs(fz - 0.93))
-    rivet = metal & (rx < 0.12) & (edge < 0.025)
-    base = np.where(rivet[..., None], base * 1.25, base)
-    col = base * (1 - seam[..., None]) + SEAM_COL * seam[..., None]
+def slabs(px, pz):
+    """Раскрой купола на плиты: крупная ячейка, разрезанная пополам несколько раз в случайных местах.
+    Возвращает расстояние до края плиты и её номер (ix, iz, path)."""
+    ix, iz = np.floor(px / SLAB), np.floor(pz / SLAB)
+    x0, z0 = ix * SLAB, iz * SLAB
+    x1, z1 = x0 + SLAB, z0 + SLAB
+    path = np.ones_like(px, dtype=np.int64)
+    for lvl, p in enumerate(SPLITS):
+        key = ix + path * 7919
+        do = hash2(key, iz, 100 + lvl) < p
+        wide = (x1 - x0) > (z1 - z0)
+        along_x = np.where(hash2(key, iz, 200 + lvl) < 0.8, wide, ~wide)
+        f = 0.28 + 0.44 * hash2(key, iz, 300 + lvl)
+        mid = np.where(along_x, x0 + f * (x1 - x0), z0 + f * (z1 - z0))
+        side = np.where(along_x, px > mid, pz > mid)
+        x0 = np.where(do & along_x & side, mid, x0)
+        x1 = np.where(do & along_x & ~side, mid, x1)
+        z0 = np.where(do & ~along_x & side, mid, z0)
+        z1 = np.where(do & ~along_x & ~side, mid, z1)
+        path = np.where(do, path * 2 + side.astype(np.int64), path)
+    e = np.minimum(np.minimum(px - x0, x1 - px), np.minimum(pz - z0, z1 - pz))
+    along = np.where((x1 - x0) > (z1 - z0), px, pz)  # для полос в пустых плитах
+    return e, ix + path * 7919, iz, along
 
-    # Несущие балки по сетке.
-    n = GIRDER_EVERY
-    gxs = px / PANEL  # балки идут по ровной сетке, без сдвига рядов
-    dgx = np.abs(gxs - n * np.round(gxs / n))
-    dgz = np.abs(gz - n * np.round(gz / n))
-    dg = np.minimum(dgx, dgz)
-    girder = 1 - smoothstep(GIRDER * 0.7, GIRDER, dg)
-    lit = 1 - smoothstep(0.0, GIRDER * 0.35, dg)  # светлая кромка по оси балки
-    gcol = GIRDER_COL * (1 + 0.35 * lit[..., None])
-    return col * (1 - girder[..., None]) + gcol * girder[..., None]
+
+def dome(px, pz, detail):
+    """Цвет купола в точке (px, pz). detail 0–1 гасит мелочь вдали (чтобы не рябило)."""
+    e, kx, kz, along = slabs(px, pz)
+    r = hash2(kx, kz, 1)
+    kind = hash2(kx, kz, 2)
+    void = kind < VOID_SHARE
+    metal = (kind >= VOID_SHARE) & (kind < VOID_SHARE + METAL_SHARE)
+    shade = (r - 0.5) * 0.26
+
+    base = np.where(metal[..., None], METAL, CONCRETE) * (1 + shade[..., None])
+    # Большие пятна и потёки, мелкая грязь.
+    stains = fbm(px * 2.2, pz * 2.2, 11) - 0.5
+    grime = fbm(px * 18, pz * 18, 12, 3) - 0.5
+    base = base * (1 + stains[..., None] * 0.35 + grime[..., None] * 0.10 * detail[..., None])
+    # Длинные царапины в двух направлениях (как на куполе Metal Garden).
+    a = 0.35
+    u1, v1 = px * np.cos(a) + pz * np.sin(a), -px * np.sin(a) + pz * np.cos(a)
+    s1 = value_noise(u1 * 90, v1 * 1.3, 21) - 0.5
+    s2 = value_noise(v1 * 70, u1 * 1.1, 22) - 0.5
+    base = base * (1 + (s1 * 0.18 + s2 * 0.12)[..., None] * detail[..., None])
+    # Трещины: у части плит — ломаная линия через плиту (прямая с изломами, не «червяк»).
+    th = hash2(kx, kz, 5) * np.pi
+    nx, nz = np.cos(th), np.sin(th)
+    off = (hash2(kx, kz, 6) - 0.5) * 0.4
+    along_c = -px * nz + pz * nx
+    jag = (value_noise(along_c * 14, kx * 0.1, 33) - 0.5) * 0.03 + (value_noise(along_c * 60, kz * 0.1, 34) - 0.5) * 0.006
+    d_crack = np.abs(px * nx + pz * nz - off - np.round((px * nx + pz * nz - off) / SLAB) * SLAB + jag)
+    cracked = hash2(kx, kz, 7) < 0.35
+    crack = np.where(cracked, 1 - smoothstep(0.002, 0.005, d_crack), 0.0) * detail
+    base = mix(base, SEAM_COL, crack * 0.8)
+
+    # Пустая плита: тёмная глубина и поперечные балки решётки.
+    stripes = smoothstep(0.75, 0.9, np.abs(np.sin(along * 70)))
+    vcol = VOID * (1 + 0.6 * stripes[..., None] * detail[..., None])
+    base = np.where(void[..., None], vcol, base)
+
+    # Швы неровной ширины.
+    w = SEAM * (0.7 + 0.6 * value_noise(px * 6, pz * 6, 41))
+    seam = 1 - smoothstep(w * 0.45, w, e)
+    col = mix(base, SEAM_COL, seam * 0.75)
+
+    # Несущие рёбра (радиальные) и кольца — смещённый центр.
+    qx, qz = px - CENTER[0], pz - CENTER[1]
+    rr = np.hypot(qx, qz)
+    ang = np.arctan2(qz, qx)
+    sector = 2 * np.pi / RIBS
+    d_ang = np.abs(((ang + sector / 2) % sector) - sector / 2)
+    d_rib = rr * np.sin(d_ang)
+    d_ring = np.abs(rr - RING_STEP * np.round(rr / RING_STEP))
+    rib = (1 - smoothstep(RIB_W * 0.6, RIB_W, d_rib)) * smoothstep(0.4, 0.9, rr)
+    ring = (1 - smoothstep(RIB_W * 0.8, RIB_W * 1.3, d_ring)) * smoothstep(0.5, 1.0, rr)
+    beam = np.maximum(rib, ring)
+    edge = (1 - smoothstep(0, RIB_W * 0.35, np.minimum(d_rib, d_ring))) * beam  # светлая кромка
+    col = mix(col, RIB_COL, beam * 0.55)
+    col = col * (1 + 0.25 * edge[..., None])
+    return col
+
+
+def dome_hit(x, y, z):
+    """Расстояние вдоль луча до купола: высота 1 над головой, опускается на s²/(2R)."""
+    s2 = x * x + z * z
+    a = s2 / DOME_R
+    safe = np.where(a > 1e-9, a, 1.0)
+    t = np.where(a > 1e-9, (-y + np.sqrt(y * y + 2 * a)) / safe, 1 / np.maximum(y, 1e-6))
+    return t
 
 
 def sky(d):
@@ -131,19 +203,28 @@ def sky(d):
     up = np.clip(y, 0, 1)
     haze = HAZE_HORIZON + (HAZE_TOP - HAZE_HORIZON) * np.sqrt(up)[..., None]
     below = HAZE_HORIZON + (HAZE_BELOW - HAZE_HORIZON) * np.sqrt(np.clip(-y, 0, 1))[..., None]
-    out = np.where((y >= 0)[..., None], haze, below)
+    col = np.where((y >= 0)[..., None], haze, below)
 
-    yy = np.maximum(y, 0.02)
-    px, pz = x / yy, z / yy
-    t = 1 / yy
+    # Купол.
+    t = dome_hit(x, y, z)
+    px, pz = x * t, z * t
     vis = ZENITH_VIS * np.exp(-HAZE_K * (t - 1))
-    # Клочья дымки под потолком: где-то плиты видно лучше, где-то хуже.
-    wisp = fbm(px * 0.5 + 3.1, pz * 0.5 - 1.7, 5)
-    vis = vis * np.clip(-0.1 + 2.0 * wisp, 0, 1.6)
-    vis = np.where(y > 0.02, np.clip(vis, 0, 0.75), 0.0)
-    plate = ceiling(px, pz)
-    lighter = (wisp - 0.5)[..., None] * 0.05
-    return out * (1 - vis[..., None]) + plate * vis[..., None] + lighter * (y > 0)[..., None]
+    vis = np.where(y > -0.08, vis, 0.0) * smoothstep(-0.08, 0.04, y)
+    detail = np.exp(-0.9 * (t - 1))
+    col = mix(col, dome(px, pz, detail), vis)
+
+    # Облака под куполом: светлые сверху, тёмные снизу; тоже тонут в дымке.
+    yc = np.maximum(y, 0.01)
+    tc = CLOUD_H / yc
+    cx, cz = x * tc, z * tc
+    dens = fbm(cx * 1.1 + 11, cz * 1.1 - 7, 51, 5)
+    cover = smoothstep(CLOUD_COVER, CLOUD_COVER + 0.2, dens)
+    lit = smoothstep(-0.08, 0.12, dens - fbm(cx * 1.1 + 11.1, cz * 1.1 - 6.9, 51, 5))
+    ccol = mix(CLOUD_DARK, CLOUD_LIT, lit * 0.8 + 0.2 * (1 - cover))
+    cvis = np.exp(-0.55 * (tc / CLOUD_H - 1)) * smoothstep(0.0, 0.08, y)
+    ccol = mix(haze, ccol, cvis)
+    col = mix(col, ccol, cover * 0.9 * smoothstep(0.0, 0.05, y))
+    return col
 
 
 def face(name):
@@ -165,8 +246,8 @@ def face(name):
     return Image.fromarray((np.clip(img, 0, 1) * 255 + 0.5).astype(np.uint8), "RGB")
 
 
-def preview(path, w=1280, h=720, pitch=35.0, fov=100.0):
-    """Взгляд на север, поднятый на pitch градусов."""
+def preview(path, pitch, w=1280, h=720, fov=95.0):
+    """Взгляд на север, поднятый на pitch градусов; нижняя треть — условная земля."""
     p = np.radians(pitch)
     fwd = np.array([0, np.sin(p), -np.cos(p)])
     right = np.array([1.0, 0, 0])
@@ -177,6 +258,8 @@ def preview(path, w=1280, h=720, pitch=35.0, fov=100.0):
     d = fwd + u[..., None] * k * right + v[..., None] * k * (h / w) * upv
     d = d / np.linalg.norm(d, axis=-1, keepdims=True)
     img = sky(d)
+    ground = d[..., 1] < -0.02
+    img = np.where(ground[..., None], np.array([0.33, 0.37, 0.28]) * 0.6 + img * 0.4, img)
     Image.fromarray((np.clip(img, 0, 1) * 255 + 0.5).astype(np.uint8), "RGB").save(path)
 
 
@@ -191,8 +274,9 @@ def main():
         print("грань", name)
     if a.preview or a.preview_only:
         os.makedirs(os.path.join(ROOT, "build"), exist_ok=True)
-        preview(os.path.join(ROOT, "build", "sky_preview.png"))
-        print("превью build/sky_preview.png")
+        for pitch in (12, 45, 80):
+            preview(os.path.join(ROOT, "build", f"sky_preview_{pitch}.png"), pitch)
+        print("превью build/sky_preview_*.png")
 
 
 if __name__ == "__main__":

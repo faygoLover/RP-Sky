@@ -8,7 +8,7 @@ version="${mod_version}"
 displayName="${mod_name}"
 authors="${mod_authors}"
 description='''${mod_description}'''
-# Небо рисует клиент; биомы выбирает тег из датапака сервера. Мод на сервере не обязателен.
+# Биом «Под плитами» — данные сервера (мод нужен на сервере), небо рисует клиент (мод нужен игрокам).
 displayTest="IGNORE_ALL_VERSION"
 
 [[dependencies.${mod_id}]]
