@@ -20,3 +20,9 @@
 
 ## Сборка
 `JAVA_HOME="C:/Program Files/Eclipse Adoptium/jdk-17.0.14.7-hotspot" ./gradlew.bat build` → `build/libs/rpsky-<версия>.jar` и `rpsky_biomes.zip`.
+
+## Справка семейства
+- Куда положить новую вещь и какие общие механизмы уже есть — `../_family/FAMILY_MAP.md` (раздел 3).
+- Указатель кода — `docs/INDEX.md` (создаёт `python ../_family/tools/mapgen.py`, руками не править).
+- Мод маленький, отдельной карты (`docs/MAP.md`) у него нет: всё устройство — в этом файле.
+- Push, выпуск сборки, живой сервер — только по прямому слову Алекса. Коммиты локальные.
